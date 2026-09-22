@@ -2,7 +2,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 import { PageDimension } from '../types/editor';
 
 // Configure PDF.js worker
-pdfjsLib.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
+pdfjsLib.GlobalWorkerOptions.workerSrc = `${import.meta.env.BASE_URL}pdf.worker.min.js`;
 
 export async function loadPdfDocument(data: ArrayBuffer) {
   const loadingTask = pdfjsLib.getDocument({
