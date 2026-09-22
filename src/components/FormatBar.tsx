@@ -9,7 +9,10 @@ import {
   Palette,
   Sparkles,
   Type,
-  Square
+  Square,
+  Minus,
+  Plus,
+  Pipette
 } from 'lucide-react';
 import { FontFamily, ToolType, EditorElement, TextElement } from '../types/editor';
 
@@ -112,15 +115,58 @@ export const FormatBar: React.FC<FormatBarProps> = ({
         </div>
       </div>
 
-      {/* Font Size */}
+      {/* Font Size with 0.5pt Precision Stepper & Direct Typing */}
       {isTextContext && (
         <div className="flex items-center gap-1">
+          <span className="text-slate-400 font-medium hidden sm:inline">Size:</span>
+          <div className="flex items-center bg-slate-100 rounded-lg border border-slate-300 overflow-hidden shadow-2xs">
+            <button
+              type="button"
+              onClick={() => onFontSizeChange(Math.max(4, Math.round((currentFontSize - 0.5) * 10) / 10))}
+              className="w-7 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors font-bold text-xs"
+              title="Decrease font size by 0.5pt"
+            >
+              <Minus size={12} />
+            </button>
+            <div className="flex items-center px-1 bg-white border-x border-slate-200">
+              <input
+                type="number"
+                step="0.5"
+                min="4"
+                max="144"
+                value={currentFontSize}
+                onChange={(e) => {
+                  const val = parseFloat(e.target.value);
+                  if (!isNaN(val) && val > 0 && val <= 200) {
+                    onFontSizeChange(Math.round(val * 10) / 10);
+                  }
+                }}
+                className="w-11 h-7 text-center font-bold text-xs text-slate-800 bg-transparent focus:outline-none"
+                title="Type exact font size (supports decimals like 9.5, 10.5, 11.2, 13)"
+              />
+              <span className="text-[10px] text-slate-400 font-bold">pt</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onFontSizeChange(Math.min(144, Math.round((currentFontSize + 0.5) * 10) / 10))}
+              className="w-7 h-8 flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-slate-200 transition-colors font-bold text-xs"
+              title="Increase font size by 0.5pt"
+            >
+              <Plus size={12} />
+            </button>
+          </div>
+
+          {/* Quick Preset Dropdown */}
           <select
-            value={currentFontSize}
-            onChange={(e) => onFontSizeChange(Number(e.target.value))}
-            className="h-8 px-2 bg-slate-50 border border-slate-300 rounded-lg text-slate-800 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs cursor-pointer"
+            value={[8, 9, 9.5, 10, 10.5, 11, 11.5, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 36, 48].includes(currentFontSize) ? currentFontSize : ''}
+            onChange={(e) => {
+              if (e.target.value) onFontSizeChange(Number(e.target.value));
+            }}
+            className="h-8 px-1.5 bg-slate-50 border border-slate-300 rounded-lg text-slate-700 font-semibold focus:outline-none focus:ring-1 focus:ring-indigo-500 text-xs cursor-pointer"
+            title="Quick standard sizes"
           >
-            {[9, 10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 42, 48, 64].map((size) => (
+            <option value="" disabled>Presets</option>
+            {[8, 9, 9.5, 10, 10.5, 11, 11.5, 12, 13, 14, 15, 16, 18, 20, 24, 28, 32, 36, 48].map((size) => (
               <option key={size} value={size}>
                 {size} pt
               </option>
@@ -195,16 +241,72 @@ export const FormatBar: React.FC<FormatBarProps> = ({
         </div>
       )}
 
-      {/* Text Color */}
-      <div className="flex items-center gap-1 pl-1 border-l border-slate-200">
-        <span className="text-slate-400 font-medium mr-1 hidden sm:inline">Color:</span>
-        <div className="flex items-center gap-1">
+      {/* Precise Color Controls (EyeDropper, Hex Editor, Presets) */}
+      <div className="flex items-center gap-1.5 pl-2 border-l border-slate-200">
+        <span className="text-slate-400 font-medium hidden sm:inline">Color:</span>
+
+        {/* EyeDropper button (samples exact pixel color from screen or PDF) */}
+        {'EyeDropper' in window && (
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const dropper = new (window as any).EyeDropper();
+                const result = await dropper.open();
+                if (result?.sRGBHex) {
+                  onColorChange(result.sRGBHex);
+                }
+              } catch (e) {
+                // cancelled
+              }
+            }}
+            className="p-1.5 bg-slate-100 hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 rounded-lg border border-slate-300 transition-colors shadow-2xs"
+            title="Pick exact color from PDF or screen with EyeDropper"
+          >
+            <Pipette size={14} />
+          </button>
+        )}
+
+        {/* Hex input & palette circle */}
+        <div className="flex items-center bg-slate-50 border border-slate-300 rounded-lg px-2 py-0.5 shadow-2xs">
+          <span className="text-slate-400 font-mono text-[11px] font-semibold mr-0.5">#</span>
+          <input
+            type="text"
+            maxLength={6}
+            value={currentColor.replace(/^#/, '').toUpperCase()}
+            onChange={(e) => {
+              const hex = e.target.value.replace(/[^0-9A-Fa-f]/g, '');
+              if (hex.length === 6 || hex.length === 3) {
+                onColorChange(`#${hex}`);
+              }
+            }}
+            className="w-14 uppercase font-mono text-xs font-bold text-slate-800 bg-transparent focus:outline-none"
+            placeholder="000000"
+            title="Type or paste exact HEX color code (e.g. F42A41 or 1E3A8A)"
+          />
+          <label className="cursor-pointer relative flex items-center ml-1">
+            <input
+              type="color"
+              value={currentColor.startsWith('#') && currentColor.length === 7 ? currentColor : '#000000'}
+              onChange={(e) => onColorChange(e.target.value)}
+              className="opacity-0 absolute inset-0 w-full h-full cursor-pointer"
+            />
+            <div
+              className="w-4 h-4 rounded-full border border-slate-400 shadow-xs ring-1 ring-slate-200"
+              style={{ backgroundColor: currentColor }}
+              title="Click to open color picker"
+            />
+          </label>
+        </div>
+
+        {/* Quick Document Presets */}
+        <div className="hidden lg:flex items-center gap-1">
           {COLOR_PRESETS.map((color) => (
             <button
               key={color}
               onClick={() => onColorChange(color)}
               style={{ backgroundColor: color }}
-              className={`w-5 h-5 rounded-full border transition-transform ${
+              className={`w-4 h-4 rounded-full border transition-transform ${
                 currentColor.toLowerCase() === color.toLowerCase()
                   ? 'border-indigo-600 scale-125 shadow-xs ring-2 ring-indigo-200'
                   : 'border-slate-300 hover:scale-110'
@@ -212,17 +314,6 @@ export const FormatBar: React.FC<FormatBarProps> = ({
               title={color}
             />
           ))}
-          <label className="cursor-pointer ml-1 relative flex items-center">
-            <input
-              type="color"
-              value={currentColor}
-              onChange={(e) => onColorChange(e.target.value)}
-              className="opacity-0 absolute inset-0 w-full h-full cursor-pointer"
-            />
-            <div className="w-5 h-5 rounded-full bg-gradient-to-tr from-indigo-500 via-rose-500 to-amber-500 border border-slate-300 flex items-center justify-center text-white text-[10px]">
-              <Palette size={11} />
-            </div>
-          </label>
         </div>
       </div>
 

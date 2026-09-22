@@ -12,7 +12,7 @@ import {
   FontFamily,
   DrawPoint
 } from '../types/editor';
-import { Edit3, Copy, Trash2, Check, Move, Download } from 'lucide-react';
+import { Edit3, Copy, Trash2, Check, Move, Download, Minus, Plus, Pipette } from 'lucide-react';
 
 interface ExtractedTextItem {
   id: string;
@@ -30,6 +30,76 @@ interface ExtractedTextItem {
   bold?: boolean;
   italic?: boolean;
   embeddedFontData?: Uint8Array;
+}
+
+/**
+ * Samples the visual rendered pixels from the canvas at the text position
+ * using a color histogram to discover the exact ground-truth text color
+ * (accurately captures CMYK, RGB, shaded, and anti-aliased colored text).
+ */
+function sampleCanvasTextColor(
+  ctx: CanvasRenderingContext2D,
+  pixelX: number,
+  pixelY: number,
+  pixelW: number,
+  pixelH: number
+): string | null {
+  try {
+    const startX = Math.max(0, Math.floor(pixelX));
+    const startY = Math.max(0, Math.floor(pixelY));
+    const sampleW = Math.min(Math.max(2, Math.ceil(pixelW)), ctx.canvas.width - startX);
+    const sampleH = Math.min(Math.max(2, Math.ceil(pixelH)), ctx.canvas.height - startY);
+    if (sampleW <= 0 || sampleH <= 0) return null;
+
+    const imgData = ctx.getImageData(startX, startY, sampleW, sampleH);
+    const data = imgData.data;
+
+    // Collect non-background color votes to find the true text stroke color
+    const colorVotes = new Map<string, { count: number; r: number; g: number; b: number }>();
+    let foundNonBg = false;
+
+    // Sample pixels across the bounding box
+    const step = Math.max(1, Math.floor(data.length / (4 * 600)));
+    for (let i = 0; i < data.length; i += 4 * step) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const a = data[i + 3];
+
+      if (a < 80) continue; // transparent
+      // Skip background paper white / near-white
+      if (r > 238 && g > 238 && b > 238) continue;
+
+      foundNonBg = true;
+      // Quantize to bucket of 8 to consolidate slight anti-aliasing variations
+      const key = `${Math.round(r / 8) * 8},${Math.round(g / 8) * 8},${Math.round(b / 8) * 8}`;
+      const existing = colorVotes.get(key);
+      if (existing) {
+        existing.count++;
+      } else {
+        colorVotes.set(key, { count: 1, r, g, b });
+      }
+    }
+
+    if (foundNonBg && colorVotes.size > 0) {
+      let topItem: { count: number; r: number; g: number; b: number } | null = null;
+      let maxVotes = 0;
+      for (const entry of colorVotes.values()) {
+        if (entry.count > maxVotes) {
+          maxVotes = entry.count;
+          topItem = entry;
+        }
+      }
+      if (topItem) {
+        return '#' + [topItem.r, topItem.g, topItem.b]
+          .map((x) => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0'))
+          .join('');
+      }
+    }
+  } catch (e) {
+    // Ignore canvas read errors if any
+  }
+  return null;
 }
 
 function cleanFontFamily(rawName: string | undefined, isBangla: boolean): string {
@@ -185,23 +255,44 @@ export const PdfPage: React.FC<PdfPageProps> = ({
             const fn = opList.fnArray[i];
             const args = opList.argsArray[i];
 
-            if (fn === pdfjsLib.OPS.setFillRGBColor) {
+            if (
+              fn === pdfjsLib.OPS.setFillRGBColor ||
+              fn === (pdfjsLib.OPS as any).setStrokeRGBColor ||
+              fn === 59 ||
+              fn === 58
+            ) {
               if (args && args.length >= 3) {
-                const r = args[0] <= 1 && args[1] <= 1 && args[2] <= 1 && (args[0] > 0 || args[1] > 0 || args[2] > 0)
-                  ? Math.round(args[0] * 255)
-                  : Math.round(args[0]);
-                const g = args[0] <= 1 && args[1] <= 1 && args[2] <= 1 && (args[0] > 0 || args[1] > 0 || args[2] > 0)
-                  ? Math.round(args[1] * 255)
-                  : Math.round(args[1]);
-                const b = args[0] <= 1 && args[1] <= 1 && args[2] <= 1 && (args[0] > 0 || args[1] > 0 || args[2] > 0)
-                  ? Math.round(args[2] * 255)
-                  : Math.round(args[2]);
+                const isUnit = args[0] <= 1 && args[1] <= 1 && args[2] <= 1 && (args[0] > 0 || args[1] > 0 || args[2] > 0);
+                const r = isUnit ? Math.round(args[0] * 255) : Math.round(args[0]);
+                const g = isUnit ? Math.round(args[1] * 255) : Math.round(args[1]);
+                const b = isUnit ? Math.round(args[2] * 255) : Math.round(args[2]);
                 curColor = '#' + [r, g, b].map((x) => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('');
               }
-            } else if (fn === pdfjsLib.OPS.setFillGray) {
+            } else if (
+              fn === pdfjsLib.OPS.setFillGray ||
+              fn === (pdfjsLib.OPS as any).setStrokeGray ||
+              fn === 57 ||
+              fn === 56
+            ) {
               if (args && args.length >= 1) {
                 const v = args[0] <= 1 && args[0] > 0 ? Math.round(args[0] * 255) : Math.round(args[0]);
                 curColor = '#' + [v, v, v].map((x) => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('');
+              }
+            } else if (
+              fn === (pdfjsLib.OPS as any).setFillCMYKColor ||
+              fn === (pdfjsLib.OPS as any).setStrokeCMYKColor ||
+              fn === 61 ||
+              fn === 60
+            ) {
+              if (args && args.length >= 4) {
+                const c = Math.min(1, Math.max(0, args[0]));
+                const m = Math.min(1, Math.max(0, args[1]));
+                const y = Math.min(1, Math.max(0, args[2]));
+                const k = Math.min(1, Math.max(0, args[3]));
+                const r = Math.round(255 * (1 - c) * (1 - k));
+                const g = Math.round(255 * (1 - m) * (1 - k));
+                const b = Math.round(255 * (1 - y) * (1 - k));
+                curColor = '#' + [r, g, b].map((x) => Math.min(255, Math.max(0, x)).toString(16).padStart(2, '0')).join('');
               }
             } else if (fn === pdfjsLib.OPS.setFont) {
               if (args && args.length >= 2) {
@@ -315,12 +406,16 @@ export const PdfPage: React.FC<PdfPageProps> = ({
             if (!item.str || !item.str.trim()) continue;
 
             const [vx, vy] = unscaledViewport.convertToViewportPoint(item.transform[4], item.transform[5]);
-            const fontSize = Math.abs(item.transform[0]) || 12;
-            const itemHeight = item.height || fontSize;
+            
+            // Calculate accurate sub-point font size
+            const rawTransformHeight = Math.hypot(item.transform[2] || 0, item.transform[3] || item.transform[0]);
+            const accurateFontSize = Math.round(((item.height && item.height > 0) ? item.height : rawTransformHeight) * 10) / 10 || 12;
+            const itemHeight = item.height || accurateFontSize;
             const topY = vy - itemHeight;
             const rawPdfX = item.transform[4];
             const rawPdfY = item.transform[5];
             const isBangla = /[\u0980-\u09FF]/.test(item.str);
+            const itemWidth = item.width || item.str.length * accurateFontSize * 0.6;
 
             // Match with operator metadata
             const cleanStr = item.str.trim();
@@ -339,8 +434,30 @@ export const PdfPage: React.FC<PdfPageProps> = ({
             const detectedFamily = cleanFontFamily(rawFontName, isBangla);
             const isBold = Boolean(fontObj?.bold || /bold|black/i.test(rawFontName));
             const isItalic = Boolean(fontObj?.italic || /italic|oblique/i.test(rawFontName));
-            const detectedColor = matchedMeta?.color || '#000000';
-            const detectedFontSize = matchedMeta?.fontSize || Math.round(fontSize);
+
+            // Extract ground-truth color from rendered canvas pixels
+            const sampledCanvasColor = sampleCanvasTextColor(
+              ctx,
+              vx * pixelRatio,
+              topY * pixelRatio,
+              itemWidth * pixelRatio,
+              itemHeight * pixelRatio
+            );
+
+            let detectedColor = '#000000';
+            if (sampledCanvasColor && sampledCanvasColor !== '#000000' && sampledCanvasColor !== '#ffffff') {
+              detectedColor = sampledCanvasColor;
+            } else if (matchedMeta?.color && matchedMeta.color !== '#000000') {
+              detectedColor = matchedMeta.color;
+            } else if (sampledCanvasColor) {
+              detectedColor = sampledCanvasColor;
+            } else if (matchedMeta?.color) {
+              detectedColor = matchedMeta.color;
+            }
+
+            const detectedFontSize = matchedMeta?.fontSize
+              ? Math.round(matchedMeta.fontSize * 10) / 10
+              : accurateFontSize;
 
             // Dynamically register embedded font in browser if available
             if (fontObj?.data && fontObj.data.length > 0 && typeof FontFace !== 'undefined') {
@@ -373,7 +490,7 @@ export const PdfPage: React.FC<PdfPageProps> = ({
               str: item.str,
               x: vx,
               y: topY,
-              width: item.width || item.str.length * fontSize * 0.6,
+              width: itemWidth,
               height: itemHeight,
               fontSize: detectedFontSize,
               rawPdfX,
@@ -1091,13 +1208,61 @@ export const PdfPage: React.FC<PdfPageProps> = ({
                     >
                       <Move size={13} />
                       <span className="text-[10px] text-indigo-300 font-bold">{te.fontFamily}</span>
-                      <span className="text-[10px] text-slate-400 font-medium">{te.fontSize}pt</span>
-                      <span
-                        className="w-2.5 h-2.5 rounded-full border border-white/60 inline-block shadow-xs flex-shrink-0"
-                        style={{ backgroundColor: te.color }}
-                        title={`Detected Font Color: ${te.color}`}
-                      />
                     </div>
+
+                    {/* Quick 0.5pt Size Nudge Stepper */}
+                    <div className="flex items-center bg-slate-800 rounded px-1 border border-slate-700">
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const newSize = Math.max(4, Math.round(((te.fontSize || 12) - 0.5) * 10) / 10);
+                          onUpdateElement({ ...te, fontSize: newSize });
+                          if (onCommitHistory) onCommitHistory();
+                        }}
+                        className="text-slate-400 hover:text-white px-0.5 font-bold text-xs"
+                        title="Decrease font size (-0.5pt)"
+                      >
+                        <Minus size={10} />
+                      </button>
+                      <span className="text-[10px] text-amber-300 font-mono px-1 min-w-[34px] text-center font-bold">
+                        {te.fontSize}pt
+                      </span>
+                      <button
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          const newSize = Math.min(144, Math.round(((te.fontSize || 12) + 0.5) * 10) / 10);
+                          onUpdateElement({ ...te, fontSize: newSize });
+                          if (onCommitHistory) onCommitHistory();
+                        }}
+                        className="text-slate-400 hover:text-white px-0.5 font-bold text-xs"
+                        title="Increase font size (+0.5pt)"
+                      >
+                        <Plus size={10} />
+                      </button>
+                    </div>
+
+                    {/* Quick Color Swatch / In-place Color Picker */}
+                    <label
+                      className="relative flex items-center cursor-pointer p-0.5 hover:bg-slate-800 rounded border border-slate-700"
+                      title={`Font color: ${te.color}. Click to edit.`}
+                      onMouseDown={(e) => e.stopPropagation()}
+                    >
+                      <span
+                        className="w-3.5 h-3.5 rounded-full border border-white/70 inline-block shadow-xs flex-shrink-0"
+                        style={{ backgroundColor: te.color || '#000000' }}
+                      />
+                      <input
+                        type="color"
+                        value={te.color || '#000000'}
+                        onChange={(e) => {
+                          onUpdateElement({ ...te, color: e.target.value });
+                          if (onCommitHistory) onCommitHistory();
+                        }}
+                        className="absolute inset-0 opacity-0 w-full h-full cursor-pointer"
+                      />
+                    </label>
 
                     {/* Download Font Button */}
                     <button
